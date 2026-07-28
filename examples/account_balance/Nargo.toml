@@ -1,0 +1,8 @@
+[package]
+name = "account_balance"
+type = "bin"
+authors = [""]
+compiler_version = ">=1.0.0"
+
+[dependencies]
+evm_storage_proofs = { path = "../../lib" }

@@ -387,7 +387,7 @@ unconstrained fn truncated_path_fails() {{
     verify_account_proof(STATE_ROOT, account(), account_nodes(), ACCOUNT_PATH_LENGTH - 1);
 }}
 """
-    path = Path(__file__).resolve().parent.parent / "src" / "tests" / "vectors.nr"
+    path = Path(__file__).resolve().parent.parent / "lib" / "src" / "tests" / "vectors.nr"
     path.write_text(out)
     print(
         f"wrote {path}: block {int(block_number, 16)}, "

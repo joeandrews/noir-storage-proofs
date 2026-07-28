@@ -16,7 +16,7 @@ The verification core is vendored from [AztecProtocol/aztec-packages](https://gi
 ```toml
 # Nargo.toml
 [dependencies]
-evm_storage_proofs = { git = "https://github.com/joeandrews/noir-storage-proofs", tag = "v0.1.0" }
+evm_storage_proofs = { git = "https://github.com/joeandrews/noir-storage-proofs", tag = "v0.2.0", directory = "lib" }
 ```
 
 ```noir
