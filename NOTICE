@@ -1,0 +1,12 @@
+noir-storage-proofs
+
+The Merkle-Patricia-Trie verification core (src/account_hash.nr,
+src/branch_hash.nr, src/bytes_sink.nr, src/extension_hash.nr, src/keccak.nr,
+src/path_verification.nr, src/slot_hash.nr, src/types.nr, src/utils.nr) is
+derived from AztecProtocol/aztec-packages
+(noir-projects/noir-contracts/contracts/test/storage_proof_test_contract/src/storage_proofs/),
+Copyright Aztec Labs, licensed under the Apache License, Version 2.0.
+
+Modifications: repackaged as a standalone Noir library; removed the aztec-nr
+Serialize/Deserialize derives from types.nr; added the top-level verification
+API (src/lib.nr), tests and input-generation scripts.
