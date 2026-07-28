@@ -1,4 +1,6 @@
 target/
 export/
 Prover.toml
+!examples/*/Prover.toml
 .claude/
+__pycache__/

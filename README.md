@@ -73,6 +73,13 @@ Each trie node arrives pre-parsed as a `Node` — 16 rows of `[u64; 4]` plus exi
 
 In a constrained (ACIR) context, path loops always run to `MAX_PATH_LENGTH` — each iteration costing a branch-node-sized keccak — regardless of the actual path length, so pick the tightest bound your target trie depth allows. Mainnet account paths are currently ~7–9 nodes; storage paths depend on the contract's trie size. In unconstrained (Brillig) contexts the loops run to the actual length.
 
+## Input invariants
+
+The `Node` / `Account` / `StorageSlot` inputs are prover-supplied witnesses, constrained in-circuit against the root you pass in. Two obligations stay with the caller:
+
+- **Zero the rows you mark absent.** A `Node` with `row_exist[i] == false` must have `rows[i] == [0; 4]`. Only a node's present children contribute to its hash, so the verifier enforces this on the rest rather than trusting it. The bundled input scripts already comply.
+- **Bind what you proved to what you meant.** Verification establishes "this account is under this state root" and "this key holds this value" — it says nothing about *which* account or key. Constrain `account.address`, `slot_key` (derive it with [`slot_key`](src/slot_key.nr) rather than taking it as an input) and the provenance of `state_root` yourself, or the prover will choose them for you.
+
 ## Limitations
 
 - **Inclusion proofs only.** A zero-valued slot is absent from the trie; proving absence (exclusion proofs) is not supported.

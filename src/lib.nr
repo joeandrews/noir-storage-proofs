@@ -14,6 +14,7 @@ pub mod extension_hash;
 pub mod keccak;
 pub mod path_verification;
 pub mod slot_hash;
+pub mod slot_key;
 pub mod types;
 pub mod utils;
 

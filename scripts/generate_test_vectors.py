@@ -8,10 +8,14 @@ vectors in the library's Node format.
 Usage: python3 scripts/generate_test_vectors.py [RPC_URL]  (then run `nargo fmt`)
 """
 
+import itertools
 import json
 import sys
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _keccak import keccak256, to_nibbles  # noqa: E402
 
 RPC_URL = sys.argv[1] if len(sys.argv) > 1 else "https://ethereum-rpc.publicnode.com"
 
@@ -134,6 +138,58 @@ def parse_node(rlp_hex: str):
     return node
 
 
+# ---------------- proof integrity + forged-key search ----------------
+
+
+def limbs_to_bytes(limbs: list[int]) -> bytes:
+    return b"".join(limb.to_bytes(8, "little") for limb in limbs)
+
+
+def check_hash_chain(path_hex: list[str], nodes: list, root: bytes, key_nibbles: list[int]) -> None:
+    """Walk the proof exactly as the circuit does, checking every node hashes to
+    the child hash its parent points at. Doubles as a multi-block keccak
+    self-test: branch nodes are ~532 bytes, four keccak blocks.
+    """
+    expected = root
+    idx = 0
+    for rlp_hex, node in zip(path_hex, nodes):
+        actual = keccak256(bytes(hex_bytes(rlp_hex)))
+        assert actual == expected, f"node {idx} hash mismatch: {actual.hex()} != {expected.hex()}"
+        if node["node_type"] == 0:  # branch: consume one nibble
+            nibble = key_nibbles[idx]
+            assert node["row_exist"][nibble], f"node {idx}: genuine path enters an absent child"
+            expected = limbs_to_bytes(node["rows"][nibble])
+            idx += 1
+        else:  # extension: consume its key nibbles
+            header_row = limbs_to_bytes(node["rows"][0])
+            is_odd, ext_len = header_row[0], header_row[16]
+            idx += (1 if is_odd else 0) + 2 * ext_len
+            expected = limbs_to_bytes(node["rows"][2])
+
+
+def find_divergent_key(nodes: list, genuine_nibbles: list[int]) -> tuple[bytes, int, int, int]:
+    """Search for a storage key whose trie path follows the genuine path down to
+    a branch node that has no child at the next nibble — i.e. a key that is
+    absent from the trie, diverging at a known depth.
+
+    Used by tests/traversal.nr to cover paths that must be rejected.
+    Deterministic counter search, so the emitted vector is reproducible.
+    """
+    depth = next((i for i, n in enumerate(nodes) if not all(n["row_exist"])), None)
+    assert depth is not None, "no node with an absent child; cannot build the forgery vector"
+    assert all(
+        n["node_type"] == 0 for n in nodes[: depth + 1]
+    ), "forgery vector requires an all-branch prefix (one nibble consumed per node)"
+    absent = [i for i, exists in enumerate(nodes[depth]["row_exist"]) if not exists]
+
+    for counter in itertools.count():
+        key = counter.to_bytes(32, "big")
+        nibbles = to_nibbles(keccak256(key))
+        if nibbles[:depth] == genuine_nibbles[:depth] and nibbles[depth] in absent:
+            return key, depth, nibbles[depth], counter
+    raise AssertionError("unreachable")
+
+
 # ---------------- Noir literal formatting ----------------
 
 
@@ -175,6 +231,27 @@ def main():
     storage_path = [parse_node(n) for n in slot_proof["proof"][:-1]]
     assert account_path and storage_path, "degenerate single-node proof"
 
+    # Independently verify both proofs before emitting them, so a broken vector
+    # can never be mistaken for a broken circuit.
+    account_key_nibbles = to_nibbles(keccak256(bytes(hex_bytes(ADDRESS))))
+    storage_key_nibbles = to_nibbles(keccak256(bytes(hex_bytes(SLOT_KEY))))
+    check_hash_chain(
+        proof["accountProof"][:-1],
+        account_path,
+        bytes(hex_bytes(block["stateRoot"])),
+        account_key_nibbles,
+    )
+    check_hash_chain(
+        slot_proof["proof"][:-1],
+        storage_path,
+        bytes(hex_bytes(proof["storageHash"])),
+        storage_key_nibbles,
+    )
+
+    divergent_key, divergent_depth, divergent_nibble, tries = find_divergent_key(
+        storage_path, storage_key_nibbles
+    )
+
     nonce = quantity_bytes(int(proof["nonce"], 16))
     balance = quantity_bytes(int(proof["balance"], 16))
     value = quantity_bytes(slot_value)
@@ -188,14 +265,24 @@ def main():
 use crate::types::{{Account, Node, StorageSlot}};
 use crate::{{verify_account_and_storage_proof, verify_account_proof, verify_storage_proof}};
 
-global ACCOUNT_PATH_LENGTH: u32 = {len(account_path)};
-global STORAGE_PATH_LENGTH: u32 = {len(storage_path)};
+pub global ACCOUNT_PATH_LENGTH: u32 = {len(account_path)};
+pub global STORAGE_PATH_LENGTH: u32 = {len(storage_path)};
 
-global STATE_ROOT: [u64; 4] = {fmt_limbs(state_root)};
+pub global STATE_ROOT: [u64; 4] = {fmt_limbs(state_root)};
 
-global SLOT_KEY: [u8; 32] = {fmt_u8_array(hex_bytes(SLOT_KEY))};
+pub global STORAGE_ROOT: [u64; 4] = {fmt_limbs(to_u64_limbs(hex_bytes(proof["storageHash"])))};
 
-fn account() -> Account {{
+pub global SLOT_KEY: [u8; 32] = {fmt_u8_array(hex_bytes(SLOT_KEY))};
+
+// A key that is absent from this storage trie, found after {tries} candidates:
+// keccak(DIVERGENT_SLOT_KEY) follows the genuine path for its first
+// {divergent_depth} nibbles, then selects child {divergent_nibble} of node {divergent_depth} — which that node
+// leaves empty. Used by tests/traversal.nr.
+pub global DIVERGENT_SLOT_KEY: [u8; 32] = {fmt_u8_array(list(divergent_key))};
+pub global DIVERGENT_PATH_LENGTH: u32 = {divergent_depth + 1};
+pub global DIVERGENT_NIBBLE: u32 = {divergent_nibble};
+
+pub fn account() -> Account {{
     Account {{
         nonce: {fmt_u8_array(pad_to(nonce, 8))},
         balance: {fmt_u8_array(pad_to(balance, 32))},
@@ -207,15 +294,15 @@ fn account() -> Account {{
     }}
 }}
 
-fn slot() -> StorageSlot {{
+pub fn slot() -> StorageSlot {{
     StorageSlot {{ value: {fmt_u8_array(pad_to(value, 32))}, value_length: {len(value)} }}
 }}
 
-fn account_nodes() -> [Node; ACCOUNT_PATH_LENGTH] {{
+pub fn account_nodes() -> [Node; ACCOUNT_PATH_LENGTH] {{
     {fmt_nodes(account_path)}
 }}
 
-fn storage_nodes() -> [Node; STORAGE_PATH_LENGTH] {{
+pub fn storage_nodes() -> [Node; STORAGE_PATH_LENGTH] {{
     {fmt_nodes(storage_path)}
 }}
 

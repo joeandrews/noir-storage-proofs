@@ -17,10 +17,15 @@ pub fn verify_path_section<let MAX_PATH_LENGTH: u32>(
         quote {
             let node = nodes[i];
             if node.is_branch_node() {
+                node.assert_absent_children_zeroed();
+
                 let hash = branch_hash::rlp_and_hash_branch_node(node);
                 assert(hash == parent);
 
                 let index = trie_key_nibbles[current_nibble_idx] as u32;
+                // Only children the node actually has are covered by its hash,
+                // so an empty slot carries no usable child hash to descend into.
+                assert(node.row_exist[index], "branch child does not exist");
                 parent = node.rows[index];
                 current_nibble_idx += 1;
             } else if node.is_extension_node() {
